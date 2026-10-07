@@ -1,0 +1,6 @@
+# Python
+server/.venv/
+__pycache__/
+.pytest_cache/
+server/data/trips.json
+server/data/*.tmp
