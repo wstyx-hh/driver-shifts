@@ -128,4 +128,48 @@ void main() {
     expect(t.minutes, 26);
     expect(t.startClock, '23:52');
   });
+
+  test('ошибки сервера показываются водителю без задвоенных слов', () async {
+    final api = Api(client: MockClient((_) async => json({
+          'errors': [
+            {'field': 'amount', 'message': 'должно быть больше 0'},
+            {'field': 'end', 'message': 'Окончание поездки должно быть позже начала'},
+          ],
+        }, 422)));
+    final trip = NewTrip(
+      start: DateTime(2026, 10, 2, 12), end: DateTime(2026, 10, 2, 11),
+      amount: 0, payment: Payment.cash, commission: 0,
+    );
+    await expectLater(
+      api.addTrip('c-1', trip),
+      throwsA(isA<ApiException>().having((e) => e.messages, 'messages',
+          ['Сумма: должно быть больше 0', 'Окончание поездки должно быть позже начала'])),
+    );
+  });
+
+  testWidgets('сервер ответил HTML-страницей — экран показывает ошибку, а не крутится вечно',
+      (tester) async {
+    final api = Api(client: MockClient((_) async => http.Response('<html>502 Bad Gateway</html>', 502)));
+    await tester.pumpWidget(DriverShiftsApp(api: api));
+    await tester.pumpAndSettle();
+    expect(find.text('Сервер ответил ошибкой 502'), findsOneWidget);
+    expect(find.text('Повторить'), findsOneWidget);
+  });
+
+  testWidgets('сервер выключен — водитель видит, что делать, и может повторить', (tester) async {
+    var up = false;
+    final api = Api(client: MockClient((req) async {
+      if (!up) throw http.ClientException('Connection refused');
+      if (req.url.path == '/api/days') return json([{'date': '2026-10-01', 'trips_count': 2}]);
+      return json(day1);
+    }));
+    await tester.pumpWidget(DriverShiftsApp(api: api));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Сервер не отвечает'), findsOneWidget);
+
+    up = true;
+    await tester.tap(find.text('Повторить'));
+    await tester.pumpAndSettle();
+    expect(find.text('08:10 – 08:32'), findsOneWidget);
+  });
 }

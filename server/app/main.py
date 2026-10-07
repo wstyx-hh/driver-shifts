@@ -27,11 +27,18 @@ _MESSAGES = {
     "datetime_type": "неверный формат даты и времени",
     "string_too_short": "не может быть пустым",
     "string_too_long": "слишком длинное значение",
+    "string_type": "нужна строка",
+    "json_invalid": "тело запроса — не JSON",
+    "model_attributes_type": "ожидается объект поездки",
+    "date_from_datetime_parsing": "нужна дата в виде ГГГГ-ММ-ДД",
+    "date_parsing": "нужна дата в виде ГГГГ-ММ-ДД",
 }
 
 
 def _humanize(err: dict) -> dict:
-    field = ".".join(str(p) for p in err["loc"] if p != "body") or None
+    # loc выглядит как ("body", "amount") или ("path", "day"); у битого JSON — ("body", 0).
+    parts = [str(p) for p in err["loc"] if p not in ("body", "path", "query") and not isinstance(p, int)]
+    field = ".".join(parts) or None
     if err["type"] == "value_error":
         message = str(err["ctx"]["error"])
     elif err["type"] in _MESSAGES:

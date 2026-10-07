@@ -167,7 +167,7 @@ class Api {
     } catch (_) {
       throw ApiException(['Нет связи с сервером. Нажмите «Сохранить» ещё раз — дубля не будет.']);
     }
-    final body = jsonDecode(utf8.decode(resp.bodyBytes));
+    final body = _decode(resp);
     if (resp.statusCode == 200 || resp.statusCode == 201) {
       return AddResult(Trip.fromJson(body['trip'] as Map<String, dynamic>), body['created'] as bool);
     }
@@ -179,21 +179,39 @@ class Api {
     try {
       resp = await _http.get(Uri.parse('$baseUrl$path'));
     } catch (_) {
-      throw ApiException(['Нет связи с сервером ($baseUrl)']);
+      throw ApiException(['Сервер не отвечает ($baseUrl). Проверьте, что он запущен, и нажмите «Повторить».']);
     }
-    final body = jsonDecode(utf8.decode(resp.bodyBytes));
+    final body = _decode(resp);
     if (resp.statusCode != 200) throw _errorFrom(body, resp.statusCode);
     return body;
+  }
+
+  /// Прокси или упавший сервер может ответить HTML-страницей. Без этой обёртки
+  /// FormatException пролетал мимо экрана, и тот навсегда оставался на загрузке.
+  dynamic _decode(http.Response resp) {
+    try {
+      return jsonDecode(utf8.decode(resp.bodyBytes));
+    } on FormatException {
+      throw ApiException(['Сервер ответил ошибкой ${resp.statusCode}']);
+    }
   }
 
   ApiException _errorFrom(dynamic body, int status) {
     if (body is Map && body['errors'] is List) {
       return ApiException([
-        for (final e in (body['errors'] as List).cast<Map<String, dynamic>>())
-          [if (e['field'] != null) fieldNames[e['field']] ?? e['field'], e['message']].join(': '),
+        for (final e in (body['errors'] as List).cast<Map<String, dynamic>>()) _describe(e),
       ]);
     }
     return ApiException(['Сервер ответил ошибкой $status']);
+  }
+
+  /// «Сумма: должно быть больше 0», но не «Окончание: Окончание поездки должно…» —
+  /// готовую фразу (с заглавной буквы) показываем как есть.
+  String _describe(Map<String, dynamic> e) {
+    final message = e['message'] as String;
+    final field = e['field'] as String?;
+    if (field == null || message.isEmpty || message[0] != message[0].toLowerCase()) return message;
+    return '${fieldNames[field] ?? field}: $message';
   }
 }
 

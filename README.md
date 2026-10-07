@@ -39,8 +39,61 @@ flutter run -d chrome          # или -d windows
 ### Тесты
 
 ```bash
-cd server && pytest            # 23 теста: сводка, дубли, проверка данных
-cd client && flutter test      # 6 тестов: экран дня, повтор после сбоя сети, форма
+cd server && pytest            # 29 тестов: сводка, дубли, проверка данных
+cd client && flutter test      # 9 тестов: экран дня, повтор после сбоя сети, форма, ошибки сервера
+```
+
+## Как устроено
+
+```mermaid
+flowchart LR
+    subgraph phone["Flutter-клиент"]
+        UI["Экран дня<br/>сводка + поездки"] --> API["Api<br/>(http)"]
+        Form["Форма поездки<br/>id создаётся 1 раз"] --> API
+    end
+    API -- "GET /api/days<br/>GET /api/days/{дата}<br/>POST /api/trips" --> Main
+    subgraph server["FastAPI-сервер"]
+        Main["main.py<br/>маршруты, ошибки по-русски"] --> Models["models.py<br/>проверка данных"]
+        Main --> Summary["summary.py<br/>расчёт сводки"]
+        Main --> Store["store.py<br/>дубли + блокировка"]
+        Store --> File[("trips.json<br/>атомарная запись")]
+    end
+```
+
+Как повторная отправка не создаёт дубль:
+
+```mermaid
+sequenceDiagram
+    participant D as Водитель
+    participant C as Клиент
+    participant S as Сервер
+    D->>C: открыл форму
+    Note over C: id = c-3f9a… (один на форму)
+    D->>C: «Сохранить»
+    C->>S: POST /api/trips {id: c-3f9a…}
+    Note over S: новая → записана в файл
+    S--xC: ответ потерялся (туннель, нет сети)
+    C->>D: «Нет связи. Нажмите ещё раз — дубля не будет»
+    D->>C: «Сохранить» ещё раз
+    C->>S: POST /api/trips {id: c-3f9a…} (тот же id)
+    Note over S: id уже есть, данные те же
+    S->>C: 200, created: false
+    C->>D: «Такая поездка уже записана — дубль не создан»
+```
+
+Решения сервера на `POST /api/trips`:
+
+```mermaid
+flowchart TD
+    A[POST /api/trips] --> V{Данные верны?}
+    V -- нет --> E422[422 + все ошибки сразу, по-русски]
+    V -- да --> I{"Есть поездка с этим id?<br/>(нет id — выводим из времени)"}
+    I -- да --> S1{Данные те же?}
+    S1 -- да --> R200[200, created: false]
+    S1 -- нет --> R409[409 + что уже сохранено]
+    I -- нет --> T{"Есть поездка с тем же<br/>началом и концом?"}
+    T -- да --> S1
+    T -- нет --> R201[201, записали в файл]
 ```
 
 ## API

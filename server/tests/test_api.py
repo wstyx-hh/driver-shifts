@@ -140,13 +140,53 @@ def test_неверные_поля_отклоняются_с_понятной_о
 def test_окончание_не_позже_начала_отклоняется(client, end):
     resp = client.post("/api/trips", json={**NEW_TRIP, "end": end})
     assert resp.status_code == 422
-    assert resp.json()["errors"][0]["message"] == "Окончание поездки должно быть позже начала"
+    assert resp.json()["errors"] == [{"field": "end", "message": "Окончание поездки должно быть позже начала"}]
 
 
 def test_комиссия_больше_суммы_отклоняется(client):
     resp = client.post("/api/trips", json={**NEW_TRIP, "commission": 2001})
     assert resp.status_code == 422
-    assert "Комиссия" in resp.json()["errors"][0]["message"]
+    assert resp.json()["errors"] == [{"field": "commission", "message": "Комиссия не может быть больше суммы поездки"}]
+
+
+def test_все_ошибки_формы_приходят_сразу_а_не_по_одной(client):
+    # Раньше проверка времени молчала, пока сумма была с ошибкой: водитель исправлял
+    # сумму, отправлял снова и только тогда узнавал про время.
+    resp = client.post("/api/trips", json={**NEW_TRIP, "amount": 0, "end": "2026-10-02T11:00:00+05:00"})
+    assert {e["field"] for e in resp.json()["errors"]} == {"amount", "end"}
+
+
+def test_id_из_пробелов_отклоняется(client):
+    resp = client.post("/api/trips", json={**NEW_TRIP, "id": "   "})
+    assert resp.status_code == 422
+    assert resp.json()["errors"][0]["field"] == "id"
+
+
+def test_id_с_пробелами_по_краям_это_та_же_поездка(client):
+    client.post("/api/trips", json=NEW_TRIP)
+    resp = client.post("/api/trips", json={**NEW_TRIP, "id": " t100 "})
+    assert resp.status_code == 200
+    assert resp.json()["trip"]["id"] == "t100"
+
+
+@pytest.mark.parametrize(
+    "send, message",
+    [
+        ({"content": "not json"}, "тело запроса — не JSON"),
+        ({"json": []}, "ожидается объект поездки"),
+    ],
+)
+def test_битое_тело_запроса_объясняется_по_русски(client, send, message):
+    resp = client.post("/api/trips", headers={"Content-Type": "application/json"}, **send)
+    assert resp.status_code == 422
+    assert resp.json()["errors"] == [{"field": None, "message": message}]
+
+
+def test_неверная_дата_в_адресе_объясняется_по_русски(client):
+    resp = client.get("/api/days/2026-13-01")
+    assert resp.status_code == 422
+    assert resp.json()["errors"][0]["field"] == "day"
+    assert "ГГГГ-ММ-ДД" in resp.json()["errors"][0]["message"]
 
 
 def test_одновременные_повторы_создают_ровно_одну_поездку(data_file):

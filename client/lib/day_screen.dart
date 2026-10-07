@@ -86,7 +86,13 @@ class _DayScreenState extends State<DayScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(result.created ? 'Поездка добавлена' : 'Такая поездка уже записана — дубль не создан'),
     ));
-    _days = await widget.api.days();
+    // Поездка уже сохранена. Если сервер пропал сразу после этого, кнопки дней
+    // останутся старыми, а ошибку покажет _open — без необработанного исключения.
+    try {
+      _days = await widget.api.days();
+    } on ApiException {
+      // кнопки дней обновятся при следующей удачной загрузке
+    }
     await _open(DateTime.parse(result.trip.startRaw.substring(0, 10)));
   }
 
