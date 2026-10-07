@@ -8,7 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .models import AddTripResult, DayInfo, DayReport, TripIn
+from .models import AddTripResult, DayInfo, DayReport, ErrorBody, TripIn
 from .store import TripConflict, TripStore
 from .summary import summarize
 
@@ -60,12 +60,21 @@ def create_app(store: TripStore) -> FastAPI:
     def list_days() -> list[DayInfo]:
         return [DayInfo(date=d, trips_count=n) for d, n in store.days()]
 
-    @app.get("/api/days/{day}", response_model=DayReport)
+    @app.get("/api/days/{day}", response_model=DayReport, responses={422: {"model": ErrorBody}})
     def day_report(day: date) -> DayReport:
         trips = store.by_day(day)
         return DayReport(date=day, summary=summarize(trips), trips=trips)
 
-    @app.post("/api/trips", response_model=AddTripResult, status_code=201)
+    @app.post(
+        "/api/trips",
+        response_model=AddTripResult,
+        status_code=201,
+        responses={
+            200: {"model": AddTripResult, "description": "Поездка уже была — дубль не создан"},
+            409: {"model": ErrorBody, "description": "Этот id или это время заняты другой поездкой"},
+            422: {"model": ErrorBody, "description": "Неверные данные"},
+        },
+    )
     def add_trip(data: TripIn, response: Response):
         try:
             trip, created = store.add(data)

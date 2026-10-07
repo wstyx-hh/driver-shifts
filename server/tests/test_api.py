@@ -200,3 +200,9 @@ def test_одновременные_повторы_создают_ровно_о�
     assert codes.count(201) == 1
     assert codes.count(200) == 19
     assert count_on(client, "2026-10-02") == 1
+
+
+def test_документация_api_описывает_ошибки_так_как_сервер_их_отдаёт(client):
+    post = client.get("/openapi.json").json()["paths"]["/api/trips"]["post"]["responses"]
+    for code in ("409", "422"):
+        assert post[code]["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorBody")

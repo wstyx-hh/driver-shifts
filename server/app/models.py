@@ -99,3 +99,15 @@ class DayInfo(BaseModel):
 class AddTripResult(BaseModel):
     trip: Trip
     created: bool
+
+
+class ErrorItem(BaseModel):
+    field: str | None
+    message: str
+
+
+class ErrorBody(BaseModel):
+    """Так сервер отвечает на 409 и 422 — описано, чтобы /docs не показывал стандартную схему FastAPI."""
+
+    errors: list[ErrorItem]
+    existing: Trip | None = None

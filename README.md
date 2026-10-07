@@ -39,7 +39,7 @@ flutter run -d chrome          # или -d windows
 ### Тесты
 
 ```bash
-cd server && pytest            # 29 тестов: сводка, дубли, проверка данных
+cd server && pytest            # 30 тестов: сводка, дубли, проверка данных
 cd client && flutter test      # 9 тестов: экран дня, повтор после сбоя сети, форма, ошибки сервера
 ```
 
