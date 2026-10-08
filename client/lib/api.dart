@@ -125,6 +125,12 @@ class ApiException implements Exception {
   String toString() => messages.join('\n');
 }
 
+/// Запрос не дошёл до сервера (нет сети, сервер выключен). В отличие от
+/// отказа сервера, такую поездку есть смысл отправить ещё раз позже.
+class OfflineException extends ApiException {
+  OfflineException(super.messages);
+}
+
 class Api {
   Api({http.Client? client, this.baseUrl = apiUrl}) : _http = client ?? http.Client();
 
@@ -147,31 +153,37 @@ class Api {
     );
   }
 
-  /// [id] создаётся один раз на форму: повторное нажатие «Сохранить» после сбоя
-  /// сети шлёт тот же id, и сервер не заведёт вторую поездку.
-  Future<AddResult> addTrip(String id, NewTrip t) async {
+  /// [id] создаётся один раз на форму: повторная отправка той же поездки
+  /// (вручную или из очереди [Outbox]) шлёт тот же id, и сервер не заведёт вторую.
+  Future<AddResult> addTrip(String id, NewTrip t) => sendTrip(tripBody(id, t));
+
+  /// Поездка в том виде, в каком уходит на сервер. Очередь хранит именно его,
+  /// чтобы повтор через час ушёл байт в байт таким же, как первая попытка.
+  static Map<String, dynamic> tripBody(String id, NewTrip t) => {
+        'id': id,
+        'start': isoWithOffset(t.start),
+        'end': isoWithOffset(t.end),
+        'amount': t.amount,
+        'payment': t.payment.name,
+        'commission': t.commission,
+      };
+
+  Future<AddResult> sendTrip(Map<String, dynamic> body) async {
     final http.Response resp;
     try {
       resp = await _http.post(
         Uri.parse('$baseUrl/api/trips'),
         headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'id': id,
-          'start': isoWithOffset(t.start),
-          'end': isoWithOffset(t.end),
-          'amount': t.amount,
-          'payment': t.payment.name,
-          'commission': t.commission,
-        }),
+        body: jsonEncode(body),
       );
     } catch (_) {
-      throw ApiException(['Нет связи с сервером. Нажмите «Сохранить» ещё раз — дубля не будет.']);
+      throw OfflineException(['Нет связи с сервером']);
     }
-    final body = _decode(resp);
+    final reply = _decode(resp);
     if (resp.statusCode == 200 || resp.statusCode == 201) {
-      return AddResult(Trip.fromJson(body['trip'] as Map<String, dynamic>), body['created'] as bool);
+      return AddResult(Trip.fromJson(reply['trip'] as Map<String, dynamic>), reply['created'] as bool);
     }
-    throw _errorFrom(body, resp.statusCode);
+    throw _errorFrom(reply, resp.statusCode);
   }
 
   Future<dynamic> _get(String path) async {
@@ -179,7 +191,7 @@ class Api {
     try {
       resp = await _http.get(Uri.parse('$baseUrl$path'));
     } catch (_) {
-      throw ApiException(['Сервер не отвечает ($baseUrl). Проверьте, что он запущен, и нажмите «Повторить».']);
+      throw OfflineException(['Сервер не отвечает ($baseUrl). Проверьте, что он запущен, и нажмите «Повторить».']);
     }
     final body = _decode(resp);
     if (resp.statusCode != 200) throw _errorFrom(body, resp.statusCode);

@@ -3,14 +3,15 @@ import 'package:flutter/services.dart';
 
 import 'api.dart';
 import 'format.dart';
+import 'outbox.dart';
 
 /// Подсказка для комиссии: подставляем, пока водитель не ввёл свою.
 const defaultCommissionPercent = 15;
 
 class AddTripSheet extends StatefulWidget {
-  const AddTripSheet({super.key, required this.api, required this.day, this.start, this.end});
+  const AddTripSheet({super.key, required this.outbox, required this.day, this.start, this.end});
 
-  final Api api;
+  final Outbox outbox;
   final DateTime day;
   final TimeOfDay? start;
   final TimeOfDay? end;
@@ -20,7 +21,7 @@ class AddTripSheet extends StatefulWidget {
 }
 
 class _AddTripSheetState extends State<AddTripSheet> {
-  // Один id на всю жизнь формы: повторное «Сохранить» после ошибки сети — та же поездка.
+  // Один id на всю жизнь формы: и повторное «Сохранить», и отправка из очереди — та же поездка.
   final _id = newTripId();
   final _amount = TextEditingController();
   final _commission = TextEditingController();
@@ -113,7 +114,7 @@ class _AddTripSheetState extends State<AddTripSheet> {
     if (trip == null) return;
     setState(() => _saving = true);
     try {
-      final result = await widget.api.addTrip(_id, trip);
+      final result = await widget.outbox.submit(_id, trip);
       if (mounted) Navigator.of(context).pop(result);
     } on ApiException catch (e) {
       if (mounted) {

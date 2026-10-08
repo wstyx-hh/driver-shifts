@@ -1,13 +1,20 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'add_trip_sheet.dart';
 import 'api.dart';
 import 'format.dart';
+import 'outbox.dart';
+
+/// Как часто пробовать досылать очередь, пока в ней что-то есть.
+const outboxRetryEvery = Duration(seconds: 20);
 
 class DayScreen extends StatefulWidget {
-  const DayScreen({super.key, required this.api, this.initialDay});
+  const DayScreen({super.key, required this.api, required this.outbox, this.initialDay});
 
   final Api api;
+  final Outbox outbox;
 
   /// Если не задан — открываем последний день, где есть поездки.
   final DateTime? initialDay;
@@ -22,20 +29,39 @@ class _DayScreenState extends State<DayScreen> {
   DayReport? _report;
   String? _error;
   bool _loading = true;
+  Timer? _retry;
+
+  Outbox get _outbox => widget.outbox;
 
   @override
   void initState() {
     super.initState();
+    _outbox.addListener(_onOutboxChanged);
+    _retry = Timer.periodic(outboxRetryEvery, (_) => _flush());
     _start();
+  }
+
+  @override
+  void dispose() {
+    _retry?.cancel();
+    _outbox.removeListener(_onOutboxChanged);
+    super.dispose();
+  }
+
+  void _onOutboxChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _start() async {
     try {
       _days = await widget.api.days();
     } on ApiException catch (e) {
+      final now = DateTime.now();
       setState(() {
         _error = e.toString();
         _loading = false;
+        // Без сети всё равно даём листать дни и записывать поездки — в очередь.
+        _day ??= widget.initialDay ?? DateTime(now.year, now.month, now.day);
       });
       return;
     }
@@ -56,12 +82,33 @@ class _DayScreenState extends State<DayScreen> {
         _report = report;
         _loading = false;
       });
+      // Сервер ответил — значит, связь есть, самое время дослать очередь.
+      if (_outbox.pending.isNotEmpty) unawaited(_flush());
     } on ApiException catch (e) {
       if (!mounted || _day != day) return;
       setState(() {
         _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _flush() async {
+    if (_outbox.pending.isEmpty) return;
+    final sent = await _outbox.flush();
+    if (sent == 0 || !mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text('Связь есть — отправлено: ${trips(sent)}'),
+    ));
+    await _refreshDays();
+    if (_day != null) await _open(_day!);
+  }
+
+  Future<void> _refreshDays() async {
+    try {
+      _days = await widget.api.days();
+    } on ApiException {
+      // кнопки дней обновятся при следующей удачной загрузке
     }
   }
 
@@ -76,24 +123,25 @@ class _DayScreenState extends State<DayScreen> {
   }
 
   Future<void> _addTrip() async {
-    final result = await showModalBottomSheet<AddResult>(
+    final result = await showModalBottomSheet<SubmitResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
-      builder: (_) => AddTripSheet(api: widget.api, day: _day ?? DateTime.now()),
+      builder: (_) => AddTripSheet(outbox: _outbox, day: _day ?? DateTime.now()),
     );
     if (result == null || !mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(result.created ? 'Поездка добавлена' : 'Такая поездка уже записана — дубль не создан'),
-    ));
-    // Поездка уже сохранена. Если сервер пропал сразу после этого, кнопки дней
-    // останутся старыми, а ошибку покажет _open — без необработанного исключения.
-    try {
-      _days = await widget.api.days();
-    } on ApiException {
-      // кнопки дней обновятся при следующей удачной загрузке
-    }
-    await _open(DateTime.parse(result.trip.startRaw.substring(0, 10)));
+    final (trip, message) = switch (result) {
+      Sent(:final result) => (
+          result.trip,
+          result.created ? 'Поездка добавлена' : 'Такая поездка уже записана — дубль не создан',
+        ),
+      Queued(:final trip) => (trip, 'Нет связи — поездка сохранена на телефоне и уйдёт сама'),
+    };
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    // Если сервер пропал сразу после сохранения, кнопки дней останутся старыми,
+    // а ошибку покажет _open — без необработанного исключения.
+    await _refreshDays();
+    await _open(DateTime.parse(trip.startRaw.substring(0, 10)));
   }
 
   @override
@@ -119,6 +167,7 @@ class _DayScreenState extends State<DayScreen> {
               ),
               if (_days.isNotEmpty) _DayChips(days: _days, selected: day, onTap: _open),
               const Divider(height: 1),
+              _OutboxBanner(outbox: _outbox, onSend: _flush),
               Expanded(child: _body()),
             ]),
     );
@@ -126,19 +175,29 @@ class _DayScreenState extends State<DayScreen> {
 
   Widget _body() {
     if (_loading) return const Center(child: CircularProgressIndicator());
+    final pending = _day == null ? <Trip>[] : _outbox.pendingOn(_day!);
+    final pendingSection = [
+      if (pending.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Text('Ждут отправки — в сводку войдут после', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 4),
+        for (final t in pending) _TripTile(trip: t, pending: true),
+      ],
+    ];
     if (_error != null) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(_error!, textAlign: TextAlign.center),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: _day == null ? _start : () => _open(_day!),
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 24, 16, 96),
+        children: [
+          Text(_error!, textAlign: TextAlign.center),
+          const SizedBox(height: 12),
+          Center(
+            child: FilledButton(
+              onPressed: _days.isEmpty ? _start : () => _open(_day!),
               child: const Text('Повторить'),
             ),
-          ]),
-        ),
+          ),
+          ...pendingSection,
+        ],
       );
     }
     final report = _report!;
@@ -149,19 +208,56 @@ class _DayScreenState extends State<DayScreen> {
         children: [
           _SummaryCard(summary: report.summary),
           const SizedBox(height: 16),
-          if (report.trips.isEmpty)
+          if (report.trips.isEmpty && pending.isEmpty)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 32),
               child: Center(child: Text('В этот день поездок нет')),
             )
-          else ...[
+          else if (report.trips.isNotEmpty) ...[
             Text('Поездки', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 4),
             for (final t in report.trips) _TripTile(trip: t),
           ],
+          ...pendingSection,
         ],
       ),
     );
+  }
+}
+
+/// Сколько поездок ещё не на сервере и какие сервер отверг при досылке.
+class _OutboxBanner extends StatelessWidget {
+  const _OutboxBanner({required this.outbox, required this.onSend});
+
+  final Outbox outbox;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final count = outbox.pending.length;
+    final rejected = outbox.rejected;
+    return Column(children: [
+      if (count > 0)
+        MaterialBanner(
+          key: const Key('outbox-banner'),
+          backgroundColor: scheme.secondaryContainer,
+          leading: const Icon(Icons.cloud_upload_outlined),
+          content: Text('Не отправлено: ${trips(count)}. Уйдут сами, когда появится связь.'),
+          actions: [TextButton(onPressed: onSend, child: const Text('Отправить сейчас'))],
+        ),
+      if (rejected.isNotEmpty)
+        MaterialBanner(
+          key: const Key('rejected-banner'),
+          backgroundColor: scheme.errorContainer,
+          leading: const Icon(Icons.error_outline),
+          content: Text([
+            for (final r in rejected)
+              '${r.trip.startRaw.substring(0, 10)} ${r.trip.startClock}–${r.trip.endClock}: ${r.messages.join('; ')}',
+          ].join('\n')),
+          actions: [TextButton(onPressed: outbox.dismissRejected, child: const Text('Понятно'))],
+        ),
+    ]);
   }
 }
 
@@ -285,9 +381,10 @@ class _Figure extends StatelessWidget {
 }
 
 class _TripTile extends StatelessWidget {
-  const _TripTile({required this.trip});
+  const _TripTile({required this.trip, this.pending = false});
 
   final Trip trip;
+  final bool pending;
 
   @override
   Widget build(BuildContext context) {
@@ -296,10 +393,15 @@ class _TripTile extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: CircleAvatar(
-        child: Icon(cash ? Icons.payments_outlined : Icons.credit_card, size: 20),
+        child: Icon(
+          pending ? Icons.cloud_upload_outlined : (cash ? Icons.payments_outlined : Icons.credit_card),
+          size: 20,
+        ),
       ),
       title: Text('${trip.startClock} – ${trip.endClock}${trip.endsNextDay ? ' (+1)' : ''}'),
-      subtitle: Text('${duration(trip.minutes)} · ${cash ? 'наличные' : 'карта'}'),
+      subtitle: Text(
+        '${duration(trip.minutes)} · ${cash ? 'наличные' : 'карта'}${pending ? ' · ждёт отправки' : ''}',
+      ),
       trailing: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         crossAxisAlignment: CrossAxisAlignment.end,

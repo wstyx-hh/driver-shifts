@@ -1,6 +1,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- В шаблоне Flutter INTERNET есть только в debug: релизный APK без него
+         молча не видит сервер. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- usesCleartextTraffic: демо-сервер без HTTPS (локальная сеть, эмулятор).
+         Когда сервер будет на HTTPS — убрать. -->
     <application
-        android:label="driver_shifts"
+        android:label="Дневник смен"
+        android:usesCleartextTraffic="true"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

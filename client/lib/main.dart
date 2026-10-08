@@ -4,16 +4,20 @@ import 'package:intl/date_symbol_data_local.dart';
 
 import 'api.dart';
 import 'day_screen.dart';
+import 'outbox.dart';
 
 Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('ru');
-  runApp(DriverShiftsApp(api: Api()));
+  final api = Api();
+  runApp(DriverShiftsApp(api: api, outbox: await Outbox.open(api)));
 }
 
 class DriverShiftsApp extends StatelessWidget {
-  const DriverShiftsApp({super.key, required this.api, this.initialDay});
+  const DriverShiftsApp({super.key, required this.api, required this.outbox, this.initialDay});
 
   final Api api;
+  final Outbox outbox;
   final DateTime? initialDay;
 
   @override
@@ -34,7 +38,7 @@ class DriverShiftsApp extends StatelessWidget {
         brightness: Brightness.dark,
         useMaterial3: true,
       ),
-      home: DayScreen(api: api, initialDay: initialDay),
+      home: DayScreen(api: api, outbox: outbox, initialDay: initialDay),
     );
   }
 }

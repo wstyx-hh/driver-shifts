@@ -1,0 +1,72 @@
+name: Проверки
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Новый пуш в ту же ветку отменяет недоделанную проверку старого.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Сервер — тесты
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+      - run: pip install -r requirements.txt
+      - run: pytest -q
+
+  client:
+    name: Клиент — анализ и тесты
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.44.1"
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  apk:
+    name: Сборка APK
+    needs: [server, client]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.44.1"
+          cache: true
+      # Адрес сервера — переменная репозитория API_URL (Settings → Variables).
+      # Без неё APK смотрит на компьютер с эмулятора Android.
+      - run: flutter build apk --release --dart-define=API_URL=${{ vars.API_URL || 'http://10.0.2.2:8000' }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: driver-shifts-apk
+          path: client/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 14
